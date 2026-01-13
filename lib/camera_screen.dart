@@ -2,8 +2,13 @@ import 'dart:ui';
 import 'package:flutter/material.dart';
 import 'package:permission_handler/permission_handler.dart';
 import 'package:camera/camera.dart';
+import 'dart:io';
 
-import 'mock_data_service.dart';
+// Firebase Imports
+import 'package:firebase_storage/firebase_storage.dart';
+import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:firebase_auth/firebase_auth.dart';
+
 import 'input_image_converter.dart';
 import 'roughness_reading.dart';
 import 'text_recognition_service.dart';
@@ -12,8 +17,9 @@ import 'scanner_overlay_painter.dart';
 
 class CameraScreen extends StatefulWidget {
   final String srfId;
+  final String? jobId;
 
-  const CameraScreen({super.key, required this.srfId});
+  const CameraScreen({super.key, required this.srfId, this.jobId});
 
   @override
   State<CameraScreen> createState() => _CameraScreenState();
@@ -280,36 +286,81 @@ class _CameraScreenState extends State<CameraScreen>
   Future<void> _saveResult() async {
     if (_lastReading == null || _capturedImage == null) return;
 
-    // Show loading?
-    ScaffoldMessenger.of(
-      context,
-    ).showSnackBar(const SnackBar(content: Text('Saving...')));
-
-    await MockDataService.saveReading(
-      widget.srfId,
-      _lastReading!,
-      _capturedImage!,
-    );
-
-    if (!mounted) return;
-
-    showDialog(
-      context: context,
-      barrierDismissible: false,
-      builder: (ctx) => AlertDialog(
-        title: const Text("Success"),
-        content: Text("Data saved for ${widget.srfId}\nEvidence captured."),
-        actions: [
-          TextButton(
-            onPressed: () {
-              Navigator.pop(ctx); // Close Dialog
-              Navigator.pop(context); // Close Camera / Back to Job Selection
-            },
-            child: const Text("Done"),
-          ),
-        ],
+    // 1. Show Persistent Loading SnackBar
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(
+        content: Text('Saving Data...'),
+        duration: Duration(minutes: 5), // Keep visible until manually cleared
       ),
     );
+
+    try {
+      String? evidenceUrl;
+
+      // 2. Upload Image to Storage (if jobId is present)
+      if (widget.jobId != null) {
+        final file = File(_capturedImage!);
+        final storageRef = FirebaseStorage.instance
+            .ref()
+            .child('evidence')
+            .child('${widget.jobId}.jpg');
+
+        await storageRef.putFile(file);
+        evidenceUrl = await storageRef.getDownloadURL();
+      }
+
+      // 3. Update Firestore
+      if (widget.jobId != null) {
+        // No second toast needed
+
+        await FirebaseFirestore.instance
+            .collection('jobs')
+            .doc(widget.jobId)
+            .update({
+              'status': 'Completed',
+              'readings': {
+                'ra': _lastReading!.ra,
+                'rmax': _lastReading!.rmax,
+                'rz': _lastReading!.rz,
+              },
+              'evidence_url': evidenceUrl,
+              'calibration_date': FieldValue.serverTimestamp(),
+              'calibrated_by': FirebaseAuth.instance.currentUser?.email,
+            });
+      } else {
+        // Fallback for testing without Job ID
+        debugPrint("No Job ID provided, skipping Firestore update.");
+      }
+
+      if (!mounted) return;
+
+      // 4. Success Dialog (Clear SnackBar first)
+      ScaffoldMessenger.of(context).clearSnackBars();
+
+      showDialog(
+        context: context,
+        barrierDismissible: false,
+        builder: (ctx) => AlertDialog(
+          title: const Text("Success"),
+          content: Text("Job ${widget.jobId ?? 'Unknown'} Completed!"),
+          actions: [
+            TextButton(
+              onPressed: () {
+                Navigator.pop(ctx); // Close Dialog
+                Navigator.pop(context); // Back to List
+              },
+              child: const Text("Done"),
+            ),
+          ],
+        ),
+      );
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).clearSnackBars();
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text('Error saving: $e')));
+    }
   }
 
   @override
@@ -432,7 +483,7 @@ class _CameraScreenState extends State<CameraScreen>
                   borderRadius: BorderRadius.circular(20),
                 ),
                 child: Text(
-                  "Job: ${widget.srfId}",
+                  "Job: ${widget.jobId ?? widget.srfId}",
                   style: const TextStyle(
                     color: Colors.white,
                     fontWeight: FontWeight.bold,

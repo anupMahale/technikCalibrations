@@ -1,22 +1,19 @@
 import 'package:flutter/material.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
-// import 'mock_data_service.dart'; // No longer needed
-import 'camera_screen.dart';
-import 'login_screen.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'dart:ui';
+import 'job_selection_screen.dart';
+import 'login_screen.dart';
 
-class JobSelectionScreen extends StatefulWidget {
-  final String instrumentName;
-
-  const JobSelectionScreen({super.key, required this.instrumentName});
+class InstrumentSelectionScreen extends StatefulWidget {
+  const InstrumentSelectionScreen({super.key});
 
   @override
-  State<JobSelectionScreen> createState() => _JobSelectionScreenState();
+  State<InstrumentSelectionScreen> createState() =>
+      _InstrumentSelectionScreenState();
 }
 
-class _JobSelectionScreenState extends State<JobSelectionScreen> {
-  // Default to Dark Mode as it usually looks better with Glass
+class _InstrumentSelectionScreenState extends State<InstrumentSelectionScreen> {
   bool _isDarkMode = true;
   String? _userEmail;
 
@@ -59,8 +56,12 @@ class _JobSelectionScreenState extends State<JobSelectionScreen> {
         title: Column(
           children: [
             Text(
-              widget.instrumentName, // Display selected instrument
-              style: TextStyle(color: appBarColor, fontWeight: FontWeight.bold),
+              'Select Instrument',
+              style: TextStyle(
+                color: appBarColor,
+                fontWeight: FontWeight.bold,
+                fontSize: 18,
+              ),
             ),
             if (_userEmail != null)
               Text(
@@ -103,12 +104,7 @@ class _JobSelectionScreenState extends State<JobSelectionScreen> {
           SafeArea(
             child: StreamBuilder<QuerySnapshot>(
               stream: FirebaseFirestore.instance
-                  .collection('jobs')
-                  .where('status', isEqualTo: 'Pending')
-                  .where(
-                    'instrument_name',
-                    isEqualTo: widget.instrumentName,
-                  ) // Filter by Instrument
+                  .collection('instrument_masters')
                   .snapshots(),
               builder: (context, snapshot) {
                 if (snapshot.hasError) {
@@ -131,7 +127,7 @@ class _JobSelectionScreenState extends State<JobSelectionScreen> {
                 if (!snapshot.hasData || snapshot.data!.docs.isEmpty) {
                   return Center(
                     child: Text(
-                      'No pending jobs.',
+                      'No instruments found.',
                       style: TextStyle(color: textColor),
                     ),
                   );
@@ -144,34 +140,27 @@ class _JobSelectionScreenState extends State<JobSelectionScreen> {
                   itemCount: docs.length,
                   itemBuilder: (context, index) {
                     final data = docs[index].data() as Map<String, dynamic>;
-                    final docId = docs[index].id;
-                    final srfId = data['srf_id'] ?? 'Unknown SRF';
-                    final instrumentName =
-                        data['instrument_name'] ?? 'Unknown Instrument';
-                    final instrumentType = data['instrument_type'] ?? '';
 
-                    return _buildGlassTile(
-                      displayId: docId, // Display Job ID (docId)
-                      instrumentName: instrumentName,
+                    // Fields: instrument, id, cert_number, size_mm
+                    final name = data['instrument'] ?? 'Unknown Instrument';
+                    final id = data['id'] ?? 'Unknown ID';
+                    final cert = data['cert_number'] ?? '-';
+                    final size = data['size_mm'] ?? '-';
+
+                    return _buildGlassCard(
+                      name: name,
+                      id: id,
+                      cert: cert,
+                      size: size,
                       textColor: textColor,
                       onTap: () {
-                        if (instrumentType == 'HOMMEL_W20') {
-                          Navigator.push(
-                            context,
-                            MaterialPageRoute(
-                              builder: (context) =>
-                                  CameraScreen(srfId: srfId, jobId: docId),
-                            ),
-                          );
-                        } else {
-                          ScaffoldMessenger.of(context).showSnackBar(
-                            SnackBar(
-                              content: Text(
-                                'Workflow for $instrumentType not implemented yet.',
-                              ),
-                            ),
-                          );
-                        }
+                        Navigator.push(
+                          context,
+                          MaterialPageRoute(
+                            builder: (context) =>
+                                JobSelectionScreen(instrumentName: name),
+                          ),
+                        );
                       },
                     );
                   },
@@ -184,9 +173,11 @@ class _JobSelectionScreenState extends State<JobSelectionScreen> {
     );
   }
 
-  Widget _buildGlassTile({
-    required String displayId,
-    required String instrumentName,
+  Widget _buildGlassCard({
+    required String name,
+    required String id,
+    required dynamic cert,
+    required dynamic size,
     required Color textColor,
     required VoidCallback onTap,
   }) {
@@ -197,11 +188,10 @@ class _JobSelectionScreenState extends State<JobSelectionScreen> {
         child: BackdropFilter(
           filter: ImageFilter.blur(sigmaX: 10, sigmaY: 10),
           child: InkWell(
-            // Make entire card clickable or use Button
+            onTap: onTap,
             child: Container(
-              padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 24),
+              padding: const EdgeInsets.all(20),
               decoration: BoxDecoration(
-                // Adaptive Glass Color
                 color: _isDarkMode
                     ? Colors.white.withOpacity(0.1)
                     : Colors.white.withOpacity(0.4),
@@ -215,51 +205,54 @@ class _JobSelectionScreenState extends State<JobSelectionScreen> {
                   ),
                 ],
               ),
-              child: Row(
-                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Expanded(
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Text(
-                          instrumentName,
-                          style: TextStyle(
-                            color: textColor.withOpacity(0.7),
-                            fontSize: 14,
-                          ),
-                          overflow: TextOverflow.ellipsis,
-                        ),
-                        const SizedBox(height: 4),
-                        Text(
-                          displayId,
-                          style: TextStyle(
-                            color: textColor,
-                            fontSize: 18,
-                            fontWeight: FontWeight.w600,
-                          ),
-                          overflow: TextOverflow.ellipsis,
-                        ),
-                      ],
+                  Text(
+                    name,
+                    style: TextStyle(
+                      color: textColor,
+                      fontSize: 20,
+                      fontWeight: FontWeight.bold,
                     ),
                   ),
-                  const SizedBox(
-                    width: 12,
-                  ), // Add spacing between text and button
-                  ElevatedButton(
-                    onPressed: onTap,
-                    style: ElevatedButton.styleFrom(
-                      backgroundColor: Colors.deepPurpleAccent,
-                      foregroundColor: Colors.white,
-                      elevation: 0,
-                    ),
-                    child: const Text('Start'),
-                  ),
+                  const SizedBox(height: 12),
+                  _buildInfoRow("ID", id, textColor),
+                  _buildInfoRow("Cert No.", cert.toString(), textColor),
+                  _buildInfoRow("Size (mm)", size.toString(), textColor),
                 ],
               ),
             ),
           ),
         ),
+      ),
+    );
+  }
+
+  Widget _buildInfoRow(String label, String value, Color textColor) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 2),
+      child: Row(
+        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+        children: [
+          Text(
+            label,
+            style: TextStyle(color: textColor.withOpacity(0.6), fontSize: 14),
+          ),
+          const SizedBox(width: 8),
+          Expanded(
+            child: Text(
+              value,
+              textAlign: TextAlign.end,
+              style: TextStyle(
+                color: textColor,
+                fontSize: 14,
+                fontWeight: FontWeight.w500,
+              ),
+              overflow: TextOverflow.ellipsis,
+            ),
+          ),
+        ],
       ),
     );
   }
