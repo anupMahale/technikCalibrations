@@ -1,21 +1,12 @@
 import 'package:flutter/material.dart';
 
 class ScannerOverlayPainter extends CustomPainter {
-  final double widthFactor;
-  final double heightFactor;
+  final Rect scanRect;
 
-  ScannerOverlayPainter({
-    required this.widthFactor,
-    required this.heightFactor,
-  });
+  ScannerOverlayPainter({required this.scanRect});
+
   @override
   void paint(Canvas canvas, Size size) {
-    final double scanWidth = size.width * widthFactor;
-    final double scanHeight = size.height * heightFactor;
-    final double left = (size.width - scanWidth) / 2;
-    final double top = (size.height - scanHeight) / 2;
-    final Rect scanRect = Rect.fromLTWH(left, top, scanWidth, scanHeight);
-
     // 1. Draw Background with Cutout
     final Paint backgroundPaint = Paint()
       ..color = Colors.black.withOpacity(0.5)
@@ -37,22 +28,26 @@ class ScannerOverlayPainter extends CustomPainter {
 
     canvas.drawPath(finalPath, backgroundPaint);
 
-    // 2. Draw Border
+    // 2. Draw Border (Glass Style: Translucent White)
     final Paint borderPaint = Paint()
-      ..color = Colors.green
+      ..color = Colors.white.withOpacity(0.5)
       ..style = PaintingStyle.stroke
-      ..strokeWidth = 3.0;
+      ..strokeWidth = 2.0;
 
-    canvas.drawRect(scanRect, borderPaint);
+    // Use RRect for slightly rounded corners if desired, or just Rect
+    // Matching the Glass Card radius (20) might be nice, but let's stick to Rect or small radius
+    final RRect borderRRect = RRect.fromRectAndRadius(
+      scanRect,
+      const Radius.circular(12),
+    );
+    canvas.drawRRect(borderRRect, borderPaint);
 
-    // 3. Draw Dividers - REMOVED
-
-    // 4. Draw Labels - REMOVED
+    // Optional: Add corner accents?
+    // For now, simple glass border as requested.
   }
 
   @override
   bool shouldRepaint(covariant ScannerOverlayPainter oldDelegate) {
-    return oldDelegate.widthFactor != widthFactor ||
-        oldDelegate.heightFactor != heightFactor;
+    return oldDelegate.scanRect != scanRect;
   }
 }

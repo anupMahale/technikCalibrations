@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import 'package:permission_handler/permission_handler.dart';
 import 'package:camera/camera.dart';
 
+import 'mock_data_service.dart';
 import 'input_image_converter.dart';
 import 'roughness_reading.dart';
 import 'text_recognition_service.dart';
@@ -10,7 +11,9 @@ import 'camera_manager.dart';
 import 'scanner_overlay_painter.dart';
 
 class CameraScreen extends StatefulWidget {
-  const CameraScreen({super.key});
+  final String srfId;
+
+  const CameraScreen({super.key, required this.srfId});
 
   @override
   State<CameraScreen> createState() => _CameraScreenState();
@@ -23,15 +26,15 @@ class _CameraScreenState extends State<CameraScreen>
   bool _isLoading = true;
   String? _errorMessage;
 
-  // Overlay size factors
-  double _scanWidthFactor = 0.6; // Initial: 60%
-  double _scanHeightFactor = 0.3; // Initial: 30%
+  // Overlay Rect
+  Rect? _scanRect;
 
   // OCR & Stability
   final _textRecognitionService = TextRecognitionService();
   bool _isScanning = false;
   bool _isScanComplete = false;
   RoughnessReading? _lastReading;
+  String? _capturedImage;
 
   // Stability Buffers
   // We require the SAME value to be seen N times consecutively to be "Confident"
@@ -165,6 +168,7 @@ class _CameraScreenState extends State<CameraScreen>
                 isValid) {
               _isScanComplete = true;
               _cameraManager.stopImageStream();
+              _captureEvidence();
             }
           });
         }
@@ -236,9 +240,26 @@ class _CameraScreenState extends State<CameraScreen>
     return true;
   }
 
+  Future<void> _captureEvidence() async {
+    try {
+      // Small delay to ensure stream is stopped?
+      // Actually, takePicture while streaming on some Android devices might be tricky,
+      // but stopping stream first is good practice.
+      final file = await _cameraManager.controller?.takePicture();
+      if (mounted) {
+        setState(() {
+          _capturedImage = file?.path;
+        });
+      }
+    } catch (e) {
+      debugPrint("Error capturing evidence: $e");
+    }
+  }
+
   void _restartScan() {
     setState(() {
       _lastReading = null;
+      _capturedImage = null;
       _isScanComplete = false;
       _isScanning = false;
 
@@ -256,9 +277,38 @@ class _CameraScreenState extends State<CameraScreen>
     _cameraManager.startImageStream(_processImage);
   }
 
-  void _saveResult() {
-    ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(content: Text('Result Saved! (Placeholder)')),
+  Future<void> _saveResult() async {
+    if (_lastReading == null || _capturedImage == null) return;
+
+    // Show loading?
+    ScaffoldMessenger.of(
+      context,
+    ).showSnackBar(const SnackBar(content: Text('Saving...')));
+
+    await MockDataService.saveReading(
+      widget.srfId,
+      _lastReading!,
+      _capturedImage!,
+    );
+
+    if (!mounted) return;
+
+    showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (ctx) => AlertDialog(
+        title: const Text("Success"),
+        content: Text("Data saved for ${widget.srfId}\nEvidence captured."),
+        actions: [
+          TextButton(
+            onPressed: () {
+              Navigator.pop(ctx); // Close Dialog
+              Navigator.pop(context); // Close Camera / Back to Job Selection
+            },
+            child: const Text("Done"),
+          ),
+        ],
+      ),
     );
   }
 
@@ -317,50 +367,168 @@ class _CameraScreenState extends State<CameraScreen>
       return const Scaffold(body: Center(child: CircularProgressIndicator()));
     }
 
-    // Full screen camera preview
+    // Initialize Rect if needed (First frame)
+    final size = MediaQuery.of(context).size;
+    if (_scanRect == null) {
+      final scanW = size.width * 0.8;
+      final scanH = size.height * 0.15;
+      final left = (size.width - scanW) / 2;
+      final top = size.height * 0.25; // 25% from top
+      _scanRect = Rect.fromLTWH(left, top, scanW, scanH);
+    }
+
+    // Ensure Safe Access
+    final rect = _scanRect!;
+
+    // Helper to build a drag handle dot
+    Widget buildHandle({
+      required double left,
+      required double top,
+      required void Function(DragUpdateDetails) onPanUpdate,
+    }) {
+      return Positioned(
+        left: left - 12, // Center the 24x24 touch target
+        top: top - 12,
+        child: GestureDetector(
+          onPanUpdate: onPanUpdate,
+          child: Container(
+            width: 24,
+            height: 24,
+            decoration: BoxDecoration(
+              color: Colors.white,
+              shape: BoxShape.circle,
+              boxShadow: [
+                BoxShadow(
+                  color: Colors.black26,
+                  blurRadius: 4,
+                  spreadRadius: 1,
+                ),
+              ],
+            ),
+          ),
+        ),
+      );
+    }
+
     return Scaffold(
       backgroundColor: Colors.black,
       body: Stack(
         fit: StackFit.expand,
         children: [
           CameraPreview(_cameraManager.controller!),
-          CustomPaint(
-            painter: ScannerOverlayPainter(
-              widthFactor: _scanWidthFactor,
-              heightFactor: _scanHeightFactor,
+
+          // Job Info Banner
+          SafeArea(
+            child: Align(
+              alignment: Alignment.topCenter,
+              child: Container(
+                margin: const EdgeInsets.only(top: 10),
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 16,
+                  vertical: 8,
+                ),
+                decoration: BoxDecoration(
+                  color: Colors.black54,
+                  borderRadius: BorderRadius.circular(20),
+                ),
+                child: Text(
+                  "Job: ${widget.srfId}",
+                  style: const TextStyle(
+                    color: Colors.white,
+                    fontWeight: FontWeight.bold,
+                    fontSize: 16,
+                  ),
+                ),
+              ),
             ),
           ),
 
-          // Controls
-          if (!_isScanComplete)
-            Positioned(
-              left: 20,
-              right: 20,
-              bottom: 30,
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  const Text("Width", style: TextStyle(color: Colors.white)),
-                  Slider(
-                    value: _scanWidthFactor,
-                    min: 0.1,
-                    max: 0.9,
-                    onChanged: (v) => setState(() => _scanWidthFactor = v),
-                  ),
-                  const Text("Height", style: TextStyle(color: Colors.white)),
-                  Slider(
-                    value: _scanHeightFactor,
-                    min: 0.1,
-                    max: 0.9,
-                    onChanged: (v) => setState(() => _scanHeightFactor = v),
-                  ),
-                ],
-              ),
-            ),
+          // Overlay Painter (Cutout & Border)
+          CustomPaint(painter: ScannerOverlayPainter(scanRect: rect)),
 
-          // Debug / Result Overlay
+          // --- Drag Handles (Only when scanning) ---
+          if (!_isScanComplete) ...[
+            // Top Center
+            buildHandle(
+              left: rect.center.dx,
+              top: rect.top,
+              onPanUpdate: (d) {
+                setState(() {
+                  double newTop = (rect.top + d.delta.dy).clamp(
+                    0.0,
+                    rect.bottom - 40,
+                  );
+                  _scanRect = Rect.fromLTRB(
+                    rect.left,
+                    newTop,
+                    rect.right,
+                    rect.bottom,
+                  );
+                });
+              },
+            ),
+            // Bottom Center
+            buildHandle(
+              left: rect.center.dx,
+              top: rect.bottom,
+              onPanUpdate: (d) {
+                setState(() {
+                  double newBottom = (rect.bottom + d.delta.dy).clamp(
+                    rect.top + 40,
+                    size.height,
+                  );
+                  _scanRect = Rect.fromLTRB(
+                    rect.left,
+                    rect.top,
+                    rect.right,
+                    newBottom,
+                  );
+                });
+              },
+            ),
+            // Left Center
+            buildHandle(
+              left: rect.left,
+              top: rect.center.dy,
+              onPanUpdate: (d) {
+                setState(() {
+                  double newLeft = (rect.left + d.delta.dx).clamp(
+                    0.0,
+                    rect.right - 40,
+                  );
+                  _scanRect = Rect.fromLTRB(
+                    newLeft,
+                    rect.top,
+                    rect.right,
+                    rect.bottom,
+                  );
+                });
+              },
+            ),
+            // Right Center
+            buildHandle(
+              left: rect.right,
+              top: rect.center.dy,
+              onPanUpdate: (d) {
+                setState(() {
+                  double newRight = (rect.right + d.delta.dx).clamp(
+                    rect.left + 40,
+                    size.width,
+                  );
+                  _scanRect = Rect.fromLTRB(
+                    rect.left,
+                    rect.top,
+                    newRight,
+                    rect.bottom,
+                  );
+                });
+              },
+            ),
+          ],
+
+          // Debug / Result Overlay (Moved to Bottom)
           Positioned(
-            top: 50,
+            bottom: 30, // Bottom aligned
             left: 20,
             right: 20,
             child: _buildGlassCard(
